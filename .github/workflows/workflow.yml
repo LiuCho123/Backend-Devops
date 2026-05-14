@@ -1,0 +1,40 @@
+name: CI/CD Pipeline - Backend
+
+on:
+  push:
+    branches: [ "deploy" ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v3
+
+      - name: Configurar credenciales de AWS
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Login en Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, tag, y push de la imagen a ECR
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          ECR_REPOSITORY: backend-devops
+          IMAGE_TAG: latest
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Despliegue en EC2 vía AWS SSM
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}", "docker pull ${{ secrets.ECR_REGISTRY }}/backend-devops:latest", "docker stop backend_api || true", "docker rm backend_api || true", "docker run -d --name backend_api --restart always -p 3000:3000 -e PORT=3000 -e DB_HOST=${{ secrets.DB_PRIVATE_IP }} -e DB_USER=root -e DB_PASSWORD=admin_password -e DB_NAME=proyecto_db -e DB_PORT=3306 ${{ secrets.ECR_REGISTRY }}/backend-devops:latest"]'
